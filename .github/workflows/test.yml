@@ -1,0 +1,64 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  PDFIUM_DIR: /opt/pdfium
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install libpdfium (CGO backend)
+        run: |
+          sudo mkdir -p "$PDFIUM_DIR"
+          curl -fsSL --retry 3 \
+            https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz \
+            | sudo tar xz -C "$PDFIUM_DIR"
+          sudo tee "$PDFIUM_DIR/pdfium.pc" >/dev/null <<EOF
+          prefix=$PDFIUM_DIR
+          libdir=$PDFIUM_DIR/lib
+          includedir=$PDFIUM_DIR/include
+
+          Name: PDFium
+          Description: PDFium
+          Version: 1
+          Libs: -L\${libdir} -lpdfium
+          Cflags: -I\${includedir}
+          EOF
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l $(git ls-files '*.go' | grep -v '^gen/'))"
+          if [ -n "$unformatted" ]; then echo "needs gofmt:"; echo "$unformatted"; exit 1; fi
+
+      - name: vet
+        run: go vet ./...
+        env:
+          CGO_ENABLED: "1"
+          PKG_CONFIG_PATH: ${{ env.PDFIUM_DIR }}
+          LD_LIBRARY_PATH: ${{ env.PDFIUM_DIR }}/lib
+
+      - name: test
+        run: go test -race ./...
+        env:
+          CGO_ENABLED: "1"
+          PKG_CONFIG_PATH: ${{ env.PDFIUM_DIR }}
+          LD_LIBRARY_PATH: ${{ env.PDFIUM_DIR }}/lib
+
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bufbuild/buf-setup-action@v1
+      - run: buf lint proto

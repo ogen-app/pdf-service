@@ -20,18 +20,22 @@ Plus the standard `grpc.health.v1.Health` service.
 A corrupt/encrypted/non-PDF input returns gRPC `InvalidArgument` (terminal — the
 client must not retry); transport/internal errors are transient.
 
-## Engine: pdfium
+## Engine: pdfium (native, CGO)
 
-Backed by [`klippa-app/go-pdfium`](https://github.com/klippa-app/go-pdfium) using
-its **pure-Go WebAssembly (wazero)** backend — `pdfium.wasm` is embedded in the
-binary, so there's nothing external to install and the build is
-`CGO_ENABLED=0` static.
+Backed by [`klippa-app/go-pdfium`](https://github.com/klippa-app/go-pdfium) with
+its **native CGO** backend (`single_threaded`), linking
+[bblanchon's prebuilt `libpdfium`](https://github.com/bblanchon/pdfium-binaries).
+pdfium is not thread-safe, so the single-threaded pool serialises pdfium calls;
+the gRPC server handles concurrency above it.
 
-> **Switching to native CGO** (faster, but needs `libpdfium` + a C toolchain):
-> swap `webassembly.Init` for `single_threaded.Init`/`multi_threaded.Init` in
-> [`internal/pdfengine/engine.go`](internal/pdfengine/engine.go) and build with
-> `CGO_ENABLED=1` + libpdfium on the linker path (adjust the Dockerfile). The
-> service and gRPC layer are backend-agnostic.
+**Build prerequisites:** a C toolchain, `CGO_ENABLED=1`, and `libpdfium`
+discoverable via `pkg-config` (a `pdfium.pc`). The Dockerfile and the `test`
+workflow fetch the prebuilt library and write the `.pc` automatically — see
+*Develop* for a local one-time setup.
+
+> For higher parallelism, swap `single_threaded.Init` for `multi_threaded.Init`
+> (needs a worker subprocess) in
+> [`internal/pdfengine/engine.go`](internal/pdfengine/engine.go).
 
 ## Configuration
 
@@ -42,9 +46,29 @@ binary, so there's nothing external to install and the build is
 
 ## Develop
 
+The CGO build needs `libpdfium` + `pkg-config`. One-time local setup (macOS x64):
+
 ```sh
-buf generate proto      # regenerate gen/ from the proto
-go test ./...           # unit + end-to-end gRPC tests (real pdfium)
+mkdir -p /tmp/pdfium
+curl -sL https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-mac-x64.tgz | tar xz -C /tmp/pdfium
+# bblanchon's dylib ships with a relative install name — make it absolute:
+install_name_tool -id /tmp/pdfium/lib/libpdfium.dylib /tmp/pdfium/lib/libpdfium.dylib
+cat > /tmp/pdfium/pdfium.pc <<'EOF'
+prefix=/tmp/pdfium
+libdir=/tmp/pdfium/lib
+includedir=/tmp/pdfium/include
+Name: PDFium
+Version: 1
+Libs: -L${libdir} -lpdfium
+Cflags: -I${includedir}
+EOF
+export PKG_CONFIG_PATH=/tmp/pdfium CGO_ENABLED=1
+# Linux: use pdfium-linux-x64.tgz and `export LD_LIBRARY_PATH=/tmp/pdfium/lib`.
+```
+
+```sh
+buf generate proto       # regenerate gen/ from the proto
+go test ./...            # unit + end-to-end gRPC tests (real native pdfium)
 go run ./cmd/pdf-service # serve on :50051
 ```
 

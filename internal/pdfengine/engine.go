@@ -1,12 +1,10 @@
 // Package pdfengine wraps klippa-app/go-pdfium: it opens a PDF and extracts
 // per-page text, page count, and a first-page thumbnail.
 //
-// Backend: the pure-Go WebAssembly (wazero) build of pdfium, so the service
-// compiles and runs with CGO_ENABLED=0 and no system libpdfium. To switch to
-// the faster native CGO backend (CON-103's original choice), replace the
-// webassembly.Init call below with single_threaded.Init / multi_threaded.Init
-// and build with CGO + libpdfium (see the Dockerfile) — the rest of this file,
-// and the whole service, is backend-agnostic.
+// Backend: the native CGO build of pdfium (CON-103). Builds require CGO plus
+// libpdfium discoverable through pkg-config (a pdfium.pc); see the Dockerfile
+// and README. The single-threaded pool serialises every pdfium call (pdfium is
+// not thread-safe), so concurrent requests queue at the engine.
 package pdfengine
 
 import (
@@ -20,7 +18,7 @@ import (
 	"github.com/klippa-app/go-pdfium"
 	"github.com/klippa-app/go-pdfium/references"
 	"github.com/klippa-app/go-pdfium/requests"
-	"github.com/klippa-app/go-pdfium/webassembly"
+	"github.com/klippa-app/go-pdfium/single_threaded"
 
 	"github.com/ogen-app/pdf-service/internal/chunk"
 )
@@ -39,26 +37,17 @@ type Engine struct {
 	pool pdfium.Pool
 }
 
-// Config tunes the worker pool.
+// Config tunes the engine.
 type Config struct {
-	// Workers is the max number of concurrent pdfium instances. 0 -> 4.
+	// Workers is advisory: the single-threaded CGO backend serialises all
+	// pdfium work through one native instance regardless. Kept for API
+	// stability and a future multi_threaded backend.
 	Workers int
 }
 
-// New initialises the pdfium pool.
-func New(cfg Config) (*Engine, error) {
-	workers := cfg.Workers
-	if workers <= 0 {
-		workers = 4
-	}
-	pool, err := webassembly.Init(webassembly.Config{
-		MinIdle:  1,
-		MaxIdle:  workers,
-		MaxTotal: workers,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("pdfengine: init pdfium: %w", err)
-	}
+// New initialises the pdfium pool (native, single-threaded).
+func New(_ Config) (*Engine, error) {
+	pool := single_threaded.Init(single_threaded.Config{})
 	return &Engine{pool: pool}, nil
 }
 
