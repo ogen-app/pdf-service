@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 
 	"google.golang.org/grpc"
@@ -17,23 +16,26 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	pdfv1 "github.com/ogen-app/pdf-service/gen/pdf/v1"
+	"github.com/ogen-app/pdf-service/internal/config"
 	"github.com/ogen-app/pdf-service/internal/pdfengine"
 	"github.com/ogen-app/pdf-service/internal/server"
 )
 
 func main() {
-	addr := getenv("PDF_SERVICE_LISTEN", ":50051")
-	workers := atoiDefault(os.Getenv("PDF_SERVICE_WORKERS"), 4)
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("pdf-service: config: %v", err)
+	}
 
-	engine, err := pdfengine.New(pdfengine.Config{Workers: workers})
+	engine, err := pdfengine.New(pdfengine.Config{Workers: cfg.Workers})
 	if err != nil {
 		log.Fatalf("pdf-service: init engine: %v", err)
 	}
 	defer engine.Close()
 
-	lis, err := net.Listen("tcp", addr)
+	lis, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
-		log.Fatalf("pdf-service: listen %s: %v", addr, err)
+		log.Fatalf("pdf-service: listen %s: %v", cfg.Listen, err)
 	}
 
 	srv := grpc.NewServer()
@@ -52,26 +54,8 @@ func main() {
 		srv.GracefulStop()
 	}()
 
-	log.Printf("pdf-service: listening on %s (workers=%d)", addr, workers)
+	log.Printf("pdf-service: listening on %s (workers=%d)", cfg.Listen, cfg.Workers)
 	if err := srv.Serve(lis); err != nil {
 		log.Fatalf("pdf-service: serve: %v", err)
 	}
-}
-
-func getenv(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
-func atoiDefault(s string, def int) int {
-	if s == "" {
-		return def
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n <= 0 {
-		return def
-	}
-	return n
 }

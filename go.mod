@@ -3,6 +3,7 @@ module github.com/ogen-app/pdf-service
 go 1.25.0
 
 require (
+	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/klippa-app/go-pdfium v1.19.4
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
