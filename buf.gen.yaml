@@ -1,0 +1,14 @@
+# Generate the Go gRPC server/client stubs for proto/pdf/v1 into ./gen.
+# This repo is the canonical home of the pdf.v1 contract (CON-103).
+version: v1
+managed:
+  enabled: true
+  go_package_prefix:
+    default: github.com/ogen-app/pdf-service/gen
+plugins:
+  - plugin: go
+    out: gen
+    opt: paths=source_relative
+  - plugin: go-grpc
+    out: gen
+    opt: paths=source_relative

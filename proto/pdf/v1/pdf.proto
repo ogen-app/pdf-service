@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package pdf.v1;
+
+// PdfService parses a PDF into page-attributed text chunks (sized for the
+// embedder), a page count, and an optional first-page thumbnail. The service is
+// stateless and internal-only — reached by the Ogen API over the Railway
+// private network (CON-103). Canonical home of this contract is the
+// ogen-app/pdf-service repo; the API consumes a versioned, pinned client.
+service PdfService {
+  // Parse client-streams the PDF bytes: the first frame carries options, every
+  // subsequent frame carries raw PDF bytes. The server replies once with the
+  // parsed result.
+  rpc Parse(stream ParseRequest) returns (ParseResponse);
+
+  // Render returns a PDF's page count and (optionally) a first-page thumbnail,
+  // WITHOUT text extraction or chunking. Used for post attachments (CON-103),
+  // which only need a thumbnail + page count. Same client-streaming framing as
+  // Parse.
+  rpc Render(stream RenderRequest) returns (RenderResponse);
+}
+
+message ParseRequest {
+  oneof payload {
+    ParseOptions options = 1; // first frame only
+    bytes chunk = 2;          // subsequent frames: PDF bytes
+  }
+}
+
+message ParseOptions {
+  string filename = 1;
+  bool render_thumbnail = 2;
+  int32 thumbnail_dpi = 3; // 0 -> service default (96)
+
+  // Chunk sizing. 0 -> service defaults (5500 / 500 / 6000). These are sized to
+  // the API's embedder input limit — the one cross-service coupling.
+  int32 chunk_target_chars = 4;
+  int32 chunk_overlap_chars = 5;
+  int32 chunk_max_chars = 6;
+}
+
+message ParseResponse {
+  int32 page_count = 1;
+  repeated Chunk chunks = 2;
+  bytes thumbnail_png = 3; // empty if not requested / render failed
+}
+
+message Chunk {
+  int32 index = 1;
+  string text = 2;
+  int32 page_start = 3;
+  int32 page_end = 4;
+}
+
+message RenderRequest {
+  oneof payload {
+    RenderOptions options = 1; // first frame only
+    bytes chunk = 2;           // subsequent frames: PDF bytes
+  }
+}
+
+message RenderOptions {
+  bool render_thumbnail = 1;
+  int32 thumbnail_dpi = 2; // 0 -> service default (96)
+}
+
+message RenderResponse {
+  int32 page_count = 1;
+  bytes thumbnail_png = 2; // empty if not requested / render failed
+}
