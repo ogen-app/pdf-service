@@ -3,7 +3,10 @@
 // chunking lives next to extraction in pdf-service.
 package chunk
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // Default chunk sizing — mirrors the Ogen embedder's input limits. Overridable
 // per request via Config (the proto carries chunk_target/overlap/max options).
@@ -112,7 +115,14 @@ func Pages(pages []Page, cfg Config) []PagedChunk {
 
 			curBuf.Reset()
 			if len(prev) > chunkOverlap {
-				curBuf.WriteString(prev[len(prev)-chunkOverlap:])
+				// Snap the overlap start forward to a rune boundary: starting
+				// mid-rune would leave orphaned continuation bytes and make the
+				// chunk invalid UTF-8, which proto3 rejects (CON-110).
+				start := len(prev) - chunkOverlap
+				for start < len(prev) && !utf8.RuneStart(prev[start]) {
+					start++
+				}
+				curBuf.WriteString(prev[start:])
 				curBuf.WriteString("\n\n")
 			}
 			curStart = curEnd
@@ -165,7 +175,17 @@ func splitLargeAtWord(para string, target int) []string {
 			boundary--
 		}
 		if boundary == 0 {
+			// No space within the first target bytes: hard-split at target, but
+			// back up to a rune boundary so we don't cut a multi-byte rune in
+			// half and emit invalid UTF-8 (CON-110). A rune is at most 4 bytes,
+			// so this steps back at most 3.
 			boundary = target
+			for boundary > 0 && !utf8.RuneStart(remaining[boundary]) {
+				boundary--
+			}
+			if boundary == 0 {
+				boundary = target
+			}
 		}
 		parts = append(parts, strings.TrimSpace(remaining[:boundary]))
 		remaining = strings.TrimSpace(remaining[boundary:])

@@ -14,6 +14,7 @@ import (
 	"image/png"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/klippa-app/go-pdfium"
 	"github.com/klippa-app/go-pdfium/references"
@@ -97,7 +98,7 @@ func (e *Engine) Extract(data []byte, renderThumbnail bool, dpi int) (*ExtractRe
 			pages = append(pages, chunk.Page{Num: i + 1})
 			continue
 		}
-		pages = append(pages, chunk.Page{Num: i + 1, Text: strings.TrimSpace(txt.Text)})
+		pages = append(pages, chunk.Page{Num: i + 1, Text: sanitizeUTF8(strings.TrimSpace(txt.Text))})
 	}
 
 	res := &ExtractResult{Pages: pages, PageCount: count}
@@ -105,6 +106,19 @@ func (e *Engine) Extract(data []byte, renderThumbnail bool, dpi int) (*ExtractRe
 		res.ThumbnailPNG = renderFirstPage(inst, doc, dpi)
 	}
 	return res, nil
+}
+
+// sanitizeUTF8 makes extracted text safe to place in a proto3 string field.
+// pdfium hands back text as UTF-16 and, for glyphs that lack a proper ToUnicode
+// mapping, can emit unpaired surrogates; the UTF-16->UTF-8 conversion then
+// yields byte sequences that are not valid UTF-8. proto3 string fields must be
+// valid UTF-8, so gRPC marshaling of such text fails with "string field
+// contains invalid UTF-8" (CON-110). Replace each invalid run with U+FFFD.
+func sanitizeUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "�")
 }
 
 // RenderResult is page count + optional thumbnail (no text).
