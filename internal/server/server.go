@@ -5,7 +5,7 @@ package server
 import (
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -76,7 +76,12 @@ func (s *Server) Parse(stream pdfv1.PdfService_ParseServer) error {
 			PageEnd:   int32(c.PageEnd),
 		})
 	}
-	log.Printf("parse: pages=%d chunks=%d thumb=%dB", res.PageCount, len(chunks), len(res.ThumbnailPNG))
+	slog.InfoContext(stream.Context(), "parse complete",
+		"component", "server.parse",
+		"pages", res.PageCount,
+		"chunks", len(chunks),
+		"thumb_bytes", len(res.ThumbnailPNG),
+	)
 	return stream.SendAndClose(&pdfv1.ParseResponse{
 		PageCount:    int32(res.PageCount),
 		Chunks:       chunks,
@@ -118,7 +123,11 @@ func (s *Server) Render(stream pdfv1.PdfService_RenderServer) error {
 	if err != nil {
 		return mapEngineErr(err)
 	}
-	log.Printf("render: pages=%d thumb=%dB", res.PageCount, len(res.ThumbnailPNG))
+	slog.InfoContext(stream.Context(), "render complete",
+		"component", "server.render",
+		"pages", res.PageCount,
+		"thumb_bytes", len(res.ThumbnailPNG),
+	)
 	return stream.SendAndClose(&pdfv1.RenderResponse{
 		PageCount:    int32(res.PageCount),
 		ThumbnailPng: res.ThumbnailPNG,

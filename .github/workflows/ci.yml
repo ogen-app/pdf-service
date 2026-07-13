@@ -47,6 +47,15 @@ jobs:
           unformatted="$(gofmt -l $(git ls-files '*.go' | grep -v '^gen/'))"
           if [ -n "$unformatted" ]; then echo "needs gofmt:"; echo "$unformatted"; exit 1; fi
 
+      # All application logging goes through log/slog (CON-107). Boot log.Fatal*
+      # in cmd/pdf-service is allowed; log.Print* is not.
+      - name: forbid stdlib log.Print*
+        run: |
+          if git grep -nE 'log\.Print' -- cmd internal; then
+            echo "::error::use log/slog, not the stdlib log.Print* functions"
+            exit 1
+          fi
+
       - name: vet
         run: go vet ./...
         env:
