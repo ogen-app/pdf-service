@@ -43,6 +43,14 @@ workflow fetch the prebuilt library and write the `.pc` automatically — see
 |---|---|---|
 | `PDF_SERVICE_LISTEN` | `:50051` | gRPC listen address |
 | `PDF_SERVICE_WORKERS` | `4` | max concurrent pdfium instances (pdfium is single-threaded) |
+| `LOG_LEVEL` | `info` | slog minimum level: `debug` \| `info` \| `warn` \| `error` |
+| `LOG_FORMAT` | `json` | slog handler: `json` (prod) \| `text` (local) |
+
+Logging is structured `log/slog` (CON-107). Every log line carries a
+`component`; each RPC also gets one access-log line and, when the caller sends an
+`x-request-id` metadata header (else one is generated and echoed back), a
+`request_id` — plus `tenant_id` from `x-tenant-id` — so a request correlates
+across the API, its jobs, and this service.
 
 ## Develop
 

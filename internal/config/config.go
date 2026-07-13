@@ -17,6 +17,12 @@ type Config struct {
 	// Workers is advisory: the single-threaded pdfium backend serialises work
 	// regardless (see pdfengine.Config.Workers).
 	Workers int `envconfig:"PDF_SERVICE_WORKERS" default:"4"`
+	// LogLevel is the minimum slog level: debug|info|warn|error. Unknown/empty
+	// falls back to info. Bare LOG_LEVEL (not prefixed) matches the Ogen API's
+	// knob so operators use identical settings across services (CON-107).
+	LogLevel string `envconfig:"LOG_LEVEL" default:"info"`
+	// LogFormat selects the slog handler: json (default, prod) or text (local).
+	LogFormat string `envconfig:"LOG_FORMAT" default:"json"`
 }
 
 // Load reads and validates the configuration from the environment.
