@@ -48,11 +48,12 @@ jobs:
           if [ -n "$unformatted" ]; then echo "needs gofmt:"; echo "$unformatted"; exit 1; fi
 
       # All application logging goes through log/slog (CON-107). Boot log.Fatal*
-      # in cmd/pdf-service is allowed; log.Print* is not.
-      - name: forbid stdlib log.Print*
+      # in cmd/pdf-service is allowed; log.Print/Printf/Println calls are not.
+      # Anchored on the call paren so prose mentions of the funcs don't trip it.
+      - name: forbid stdlib log.Print calls
         run: |
-          if git grep -nE 'log\.Print' -- cmd internal; then
-            echo "::error::use log/slog, not the stdlib log.Print* functions"
+          if git grep -nE 'log\.Print(ln|f)?\(' -- cmd internal; then
+            echo "::error::use log/slog, not the stdlib log.Print/Printf/Println functions"
             exit 1
           fi
 
