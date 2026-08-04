@@ -19,6 +19,7 @@ import (
 	"github.com/ogen-app/pdf-service/internal/config"
 	"github.com/ogen-app/pdf-service/internal/logging"
 	"github.com/ogen-app/pdf-service/internal/pdfengine"
+	"github.com/ogen-app/pdf-service/internal/runtimetune"
 	"github.com/ogen-app/pdf-service/internal/server"
 )
 
@@ -33,7 +34,15 @@ func main() {
 
 	logger := logging.New(cfg)
 
-	engine, err := pdfengine.New(pdfengine.Config{Workers: cfg.Workers})
+	// Bound the Go heap to the container and return burst-freed Go memory to the
+	// OS so RSS tracks real usage instead of holding a high-water mark. pdfium's
+	// in-process CGO memory is outside the Go heap and unaffected — see README.
+	runtimetune.Apply(logger, cfg)
+
+	engine, err := pdfengine.New(pdfengine.Config{
+		Workers:        cfg.Workers,
+		ScavengeOnIdle: cfg.ScavengeOnIdle,
+	})
 	if err != nil {
 		logger.Error("init engine", "component", "boot", "err", err)
 		os.Exit(1)

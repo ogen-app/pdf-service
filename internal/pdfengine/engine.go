@@ -12,7 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"image/png"
+	"log/slog"
+	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -36,6 +39,16 @@ const instanceTimeout = 60 * time.Second
 // instance.
 type Engine struct {
 	pool pdfium.Pool
+
+	// scavengeOnIdle returns freed memory to the OS once all in-flight work
+	// drains after a burst; active tracks in-flight Extract/Render calls so the
+	// drain-to-idle edge can be detected, and scavenging collapses overlapping
+	// scavenge triggers into one. scavengeFn is the actual reclaim
+	// (debug.FreeOSMemory), injectable for tests.
+	scavengeOnIdle bool
+	scavengeFn     func()
+	active         atomic.Int64
+	scavenging     atomic.Bool
 }
 
 // Config tunes the engine.
@@ -44,12 +57,22 @@ type Config struct {
 	// pdfium work through one native instance regardless. Kept for API
 	// stability and a future multi_threaded backend.
 	Workers int
+	// ScavengeOnIdle returns freed memory to the OS (debug.FreeOSMemory) once all
+	// in-flight Extract/Render calls drain to idle after a burst, so container RSS
+	// tracks real usage. Reclaims Go-heap pages (the reassembled PDF bytes,
+	// extracted text, thumbnail) — pdfium's in-process CGO allocations are outside
+	// the Go heap and unaffected.
+	ScavengeOnIdle bool
 }
 
 // New initialises the pdfium pool (native, single-threaded).
-func New(_ Config) (*Engine, error) {
+func New(cfg Config) (*Engine, error) {
 	pool := single_threaded.Init(single_threaded.Config{})
-	return &Engine{pool: pool}, nil
+	return &Engine{
+		pool:           pool,
+		scavengeOnIdle: cfg.ScavengeOnIdle,
+		scavengeFn:     debug.FreeOSMemory,
+	}, nil
 }
 
 // Close tears down the pool.
@@ -71,6 +94,9 @@ type ExtractResult struct {
 // renderThumbnail) a first-page PNG at dpi (<=0 -> 96). Thumbnail failures are
 // non-fatal — the rest of the result is still returned.
 func (e *Engine) Extract(data []byte, renderThumbnail bool, dpi int) (*ExtractResult, error) {
+	e.active.Add(1)
+	defer e.requestDone()
+
 	inst, err := e.pool.GetInstance(instanceTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("pdfengine: get instance: %w", err)
@@ -130,6 +156,9 @@ type RenderResult struct {
 // Render opens the PDF and returns its page count and (when renderThumbnail) a
 // first-page PNG — no text extraction.
 func (e *Engine) Render(data []byte, renderThumbnail bool, dpi int) (*RenderResult, error) {
+	e.active.Add(1)
+	defer e.requestDone()
+
 	inst, err := e.pool.GetInstance(instanceTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("pdfengine: get instance: %w", err)
@@ -151,6 +180,37 @@ func (e *Engine) Render(data []byte, renderThumbnail bool, dpi int) (*RenderResu
 		res.ThumbnailPNG = renderFirstPage(inst, doc, dpi)
 	}
 	return res, nil
+}
+
+// requestDone decrements the in-flight counter and, when this was the last
+// active Extract/Render call, kicks off an idle scavenge so the burst's freed
+// Go-heap memory (the reassembled PDF bytes, extracted text, thumbnail) returns
+// to the OS instead of lingering as container RSS. Only the call that drains the
+// count to zero triggers it, so a steady stream of work scavenges at most once
+// per quiet gap rather than after every request.
+func (e *Engine) requestDone() {
+	if e.active.Add(-1) == 0 && e.scavengeOnIdle {
+		e.scavenge()
+	}
+}
+
+// scavenge returns freed memory to the OS off the request path. debug.
+// FreeOSMemory runs a stop-the-world GC, so it must not block a request; it also
+// must not pile up if bursts drain to idle repeatedly, hence the single-flight
+// guard. It reclaims only Go-managed pages — pdfium's in-process CGO allocations
+// are outside the Go heap and unaffected. If a request arrives mid-scavenge the
+// extra GC is harmless — just a little CPU, of which this service has ample
+// between bursts.
+func (e *Engine) scavenge() {
+	if !e.scavenging.CompareAndSwap(false, true) {
+		return // a scavenge is already running
+	}
+	go func() {
+		defer e.scavenging.Store(false)
+		e.scavengeFn()
+		slog.Debug("returned freed memory to OS after idle",
+			"component", "pdfengine.scavenge")
+	}()
 }
 
 func openDocument(inst pdfium.Pdfium, data []byte) (doc references.FPDF_DOCUMENT, closeDoc func(), err error) {
