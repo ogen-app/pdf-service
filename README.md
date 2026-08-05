@@ -43,8 +43,31 @@ workflow fetch the prebuilt library and write the `.pc` automatically — see
 |---|---|---|
 | `PDF_SERVICE_LISTEN` | `:50051` | gRPC listen address |
 | `PDF_SERVICE_WORKERS` | `4` | max concurrent pdfium instances (pdfium is single-threaded) |
+| `PDF_SERVICE_GC_PERCENT` | `50` | GC target (GOGC); lower = smaller Go heap, more CPU. `<=0` keeps the runtime default |
+| `PDF_SERVICE_MEMORY_LIMIT_RATIO` | `0.9` | soft mem limit (GOMEMLIMIT) as a fraction of the cgroup limit; ignored if `GOMEMLIMIT` is set or no cgroup limit is found |
+| `PDF_SERVICE_SCAVENGE_ON_IDLE` | `true` | return freed Go-heap memory to the OS once all in-flight work drains after a burst |
 | `LOG_LEVEL` | `info` | slog minimum level: `debug` \| `info` \| `warn` \| `error` |
 | `LOG_FORMAT` | `json` | slog handler: `json` (prod) \| `text` (local) |
+
+### Memory footprint
+
+Every request reassembles the whole streamed PDF in memory (up to 110 MB) and,
+for `Parse`, holds every page's extracted text — all request-local and garbage
+once the RPC returns. What container metrics show as a "leak" is usually the Go
+runtime and cgroup holding that **reclaimable** high-water mark after a burst:
+RSS steps up and stays flat rather than being freed. Three knobs address the Go
+side — `GOMEMLIMIT` (derived from the cgroup limit, in `internal/runtimetune`)
+caps the heap, `GOGC` collects more often, and the idle scavenge
+(`debug.FreeOSMemory` once all in-flight `Extract`/`Render` calls drain) returns
+freed pages to the OS. A genuine leak looks different: a rising staircase across
+successive bursts, not a plateau.
+
+> **Caveat — pdfium is in-process CGO, not a child process.** Unlike a service
+> that shells out to a subprocess (whose RSS vanishes on exit), pdfium's working
+> memory is native `malloc`, outside the Go heap: `GOMEMLIMIT` doesn't count it
+> and `debug.FreeOSMemory` doesn't return it. These knobs govern the **Go-side**
+> footprint (reassembled bytes, extracted text, thumbnails, gRPC buffers) only;
+> pdfium's native footprint is a separate ceiling. See `MEMORY_TUNING.md`.
 
 Logging is structured `log/slog` (CON-107). Every log line carries a
 `component`; each RPC also gets one access-log line and, when the caller sends an
