@@ -30,8 +30,8 @@ const (
 // PdfService parses a PDF into page-attributed text chunks (sized for the
 // embedder), a page count, and an optional first-page thumbnail. The service is
 // stateless and internal-only — reached by the Ogen API over the Railway
-// private network (CON-103). Canonical home of this contract is the
-// ogen-app/pdf-service repo; the API consumes a versioned, pinned client.
+// private network (CON-103). Implemented by the ogen-app/pdf-service repo; the
+// Ogen API consumes a versioned, pinned client generated from this contract.
 type PdfServiceClient interface {
 	// Parse client-streams the PDF bytes: the first frame carries options, every
 	// subsequent frame carries raw PDF bytes. The server replies once with the
@@ -85,8 +85,8 @@ type PdfService_RenderClient = grpc.ClientStreamingClient[RenderRequest, RenderR
 // PdfService parses a PDF into page-attributed text chunks (sized for the
 // embedder), a page count, and an optional first-page thumbnail. The service is
 // stateless and internal-only — reached by the Ogen API over the Railway
-// private network (CON-103). Canonical home of this contract is the
-// ogen-app/pdf-service repo; the API consumes a versioned, pinned client.
+// private network (CON-103). Implemented by the ogen-app/pdf-service repo; the
+// Ogen API consumes a versioned, pinned client generated from this contract.
 type PdfServiceServer interface {
 	// Parse client-streams the PDF bytes: the first frame carries options, every
 	// subsequent frame carries raw PDF bytes. The server replies once with the
