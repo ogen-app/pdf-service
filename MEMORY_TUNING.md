@@ -12,44 +12,51 @@ rare burst peak. The goal is therefore to keep idle RSS low, not just to cap the
 peak.
 
 The service holds no state across requests (every buffer is request-local and
-bounded), so the "leak" seen in metrics is reclaimable memory the Go
-runtime/cgroup hasn't returned — a flat plateau after a burst, not a rising
-staircase. The knobs below make RSS track real usage.
+bounded), so the "leak" seen in metrics is reclaimable memory the allocators
+haven't returned. Without the native trim (below) it even looks like a rising
+staircase: measured locally, five identical bursts took idle RSS 120 → 246 MB
+while the live Go heap stayed at 3–4 MB. The knobs below make RSS track real
+usage.
 
 ## What actually holds memory here
 
-Two different pools, and the knobs only reach one of them:
+Two different pools, reached by different knobs:
 
 - **Go heap (these knobs reach it):** `server.go` reassembles the entire streamed
   PDF in memory (up to `maxPDFBytes`, 110 MB) before the engine runs, plus — for
   `Parse` — every page's extracted text, the chunk slices, and the thumbnail PNG.
   All request-local, all garbage once the RPC returns. This is a real, sometimes
   large, high-water mark that `GOMEMLIMIT`/`GOGC`/the idle scavenge do control.
-- **pdfium native heap (these knobs DO NOT reach it):** pdfium runs in-process via
-  **CGO**, so its per-document working memory is native `malloc` — outside the Go
-  heap. `GOMEMLIMIT` doesn't count it and `debug.FreeOSMemory` doesn't return it.
-  pdfium frees it back to the C allocator on instance/document close, but glibc
-  may keep it as its own high-water mark (Go has no `malloc_trim` hook). This is a
-  separate ceiling; the only levers on it are input size and concurrency.
+- **pdfium native heap (the idle scavenge's `malloc_trim` reaches it):** pdfium
+  runs in-process via **CGO**, so its per-document working memory is native
+  `malloc` — outside the Go heap, so `GOMEMLIMIT`/`GOGC` don't see it. Go runs CGO
+  calls on whichever OS thread is free, and glibc gives each thread its own
+  arena (64 MB-aligned anonymous mappings in `/proc/<pid>/smaps`). pdfium frees
+  its memory on document close, but glibc keeps the pages resident in those
+  arenas — this was **most of the idle RSS** (≈95% after a few bursts). Two
+  fixes are in place: the idle scavenge calls `malloc_trim(0)` (via CGO,
+  `internal/pdfengine/malloctrim_linux.go`), and the Dockerfile sets
+  `GLIBC_TUNABLES=glibc.malloc.arena_max=2` to bound how many arenas a burst can
+  spread across. Peak native usage during a burst is still driven by input size
+  and concurrency.
 
 ## Recommended values
 
 ```bash
-PDF_SERVICE_SCAVENGE_ON_IDLE=true    # returns the Go-side burst plateau
+PDF_SERVICE_SCAVENGE_ON_IDLE=true    # returns the burst plateau (Go + native)
 PDF_SERVICE_GC_PERCENT=50            # keep default; minor lever here
 PDF_SERVICE_MEMORY_LIMIT_RATIO=0.7   # safety net, tune to your cap (see below)
 ```
 
-### `SCAVENGE_ON_IDLE=true` — returns the Go-side plateau
+### `SCAVENGE_ON_IDLE=true` — returns the burst plateau
 
-Railway bills measured RSS over time, and the service is idle most hours. The
-idle scavenge (`debug.FreeOSMemory` once all in-flight `Extract`/`Render` calls
-drain) drops the **Go-side** burst plateau — the reassembled PDF bytes and
-extracted text, which for a large document is the bigger of the two pools — back
-toward the Go baseline, so most billing samples catch the low idle number. It
-does **not** return pdfium's native plateau; if idle RSS stays high after this is
-on, that residue is the C allocator's, not Go's. Keep it on regardless — the
-Go-side reclaim is free money on a bursty/idle service.
+Railway bills measured RSS over time, and the service is idle most hours. Once
+all in-flight `Extract`/`Render` calls drain, the idle scavenge runs
+`debug.FreeOSMemory` (the Go heap: reassembled PDF bytes, extracted text) and
+then `malloc_trim(0)` (pdfium's freed native memory in glibc's arenas), so most
+billing samples catch the low idle number. Measured locally over five identical
+bursts, idle RSS stayed flat at ~55 MB with it, against 120 → 246 MB and still
+rising without the trim, with no measurable throughput cost. Keep it on.
 
 ### `GC_PERCENT=50` — minor lever, don't overthink
 
@@ -91,13 +98,15 @@ runaway, and makes the derived `GOMEMLIMIT` meaningful.
   big file, the lever is capping inbound concurrency at the gRPC server, not the
   engine's advisory `PDF_SERVICE_WORKERS`.
 - **Idle baseline itself:** after deploy, check what the service floors at between
-  bursts. If it's still high idle, decide which pool it is — Go baseline
-  (always-on gRPC/runtime, only architectural levers left) vs. pdfium native
-  residue (input/concurrency levers above), which the scavenge can't touch.
+  bursts (~8 MB fresh, ~55 MB after bursts in local tests). If it's still high,
+  look at `/proc/<pid>/smaps`: many large 64 MB-aligned anonymous regions mean
+  glibc arenas (check the scavenge ran); a big Go heap in `GODEBUG=gctrace=1`
+  output after a `(forced)` GC means Go-side retention.
 
 ## Verify after deploy
 
-Run a couple of requests and confirm memory returns toward baseline (reuse)
-rather than climbing across bursts (which would be a real leak). At
+Run a couple of requests and confirm memory returns toward baseline rather than
+climbing across bursts. With the trim in place, a staircase that survives idle
+scavenges would be a real leak. At
 `LOG_LEVEL=debug`, each scavenge logs `component=pdfengine.scavenge`; boot logs
 the derived `GOMEMLIMIT` under `component=runtimetune`.

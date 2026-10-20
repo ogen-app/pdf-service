@@ -40,6 +40,11 @@ RUN ldconfig
 USER app
 
 ENV PDF_SERVICE_LISTEN=":50051"
+# pdfium's CGO calls run on whichever OS thread Go picks, and glibc gives each
+# thread its own malloc arena whose freed pages stay resident. Capping arenas
+# bounds the native footprint during bursts; the idle scavenge's malloc_trim
+# returns the rest. See MEMORY_TUNING.md.
+ENV GLIBC_TUNABLES="glibc.malloc.arena_max=2"
 EXPOSE 50051
 
 # Private-network only — orchestrators probe gRPC health via grpc_health_probe.

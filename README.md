@@ -53,21 +53,22 @@ workflow fetch the prebuilt library and write the `.pc` automatically — see
 
 Every request reassembles the whole streamed PDF in memory (up to 110 MB) and,
 for `Parse`, holds every page's extracted text — all request-local and garbage
-once the RPC returns. What container metrics show as a "leak" is usually the Go
-runtime and cgroup holding that **reclaimable** high-water mark after a burst:
-RSS steps up and stays flat rather than being freed. Three knobs address the Go
-side — `GOMEMLIMIT` (derived from the cgroup limit, in `internal/runtimetune`)
-caps the heap, `GOGC` collects more often, and the idle scavenge
-(`debug.FreeOSMemory` once all in-flight `Extract`/`Render` calls drain) returns
-freed pages to the OS. A genuine leak looks different: a rising staircase across
-successive bursts, not a plateau.
+once the RPC returns. A freshly booted idle container sits at ~8 MB.
 
-> **Caveat — pdfium is in-process CGO, not a child process.** Unlike a service
-> that shells out to a subprocess (whose RSS vanishes on exit), pdfium's working
-> memory is native `malloc`, outside the Go heap: `GOMEMLIMIT` doesn't count it
-> and `debug.FreeOSMemory` doesn't return it. These knobs govern the **Go-side**
-> footprint (reassembled bytes, extracted text, thumbnails, gRPC buffers) only;
-> pdfium's native footprint is a separate ceiling. See `MEMORY_TUNING.md`.
+The bigger idle cost is native: pdfium runs **in-process via CGO**, and its
+working memory is glibc `malloc` spread across per-thread arenas (Go runs CGO
+calls on whichever OS thread is free). When a document closes, pdfium frees that
+memory but glibc keeps the pages resident, so without intervention RSS ratchets
+up a step with every burst while the live Go heap stays at a few MB — it looks
+like a leak but isn't.
+
+The idle scavenge (once all in-flight `Extract`/`Render` calls drain) returns
+both pools to the OS: `debug.FreeOSMemory` for the Go heap and `malloc_trim(0)`
+for the glibc arenas. The Dockerfile also caps glibc at two arenas
+(`GLIBC_TUNABLES=glibc.malloc.arena_max=2`), which bounds the native footprint
+during bursts. `GOMEMLIMIT` (derived from the cgroup limit, in
+`internal/runtimetune`) and `GOGC` govern only the Go heap. See
+`MEMORY_TUNING.md`.
 
 Logging is structured `log/slog` (CON-107). Every log line carries a
 `component`; each RPC also gets one access-log line and, when the caller sends an

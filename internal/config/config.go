@@ -29,11 +29,12 @@ type Config struct {
 	// no finite cgroup limit is found (e.g. local dev). GOMEMLIMIT bounds only the
 	// Go heap, so leave headroom for pdfium's native (CGO) working set.
 	MemoryLimitRatio float64 `envconfig:"PDF_SERVICE_MEMORY_LIMIT_RATIO" default:"0.9"`
-	// ScavengeOnIdle returns freed memory to the OS (debug.FreeOSMemory) once all
-	// in-flight Extract/Render calls drain to idle after a burst, so container RSS
-	// tracks real usage instead of holding a high-water mark. Runs off the request
-	// path; disable if the extra GC churn is unwanted. Reclaims Go-heap pages (the
-	// reassembled PDF bytes, extracted text, thumbnail) — not pdfium's CGO memory.
+	// ScavengeOnIdle returns freed memory to the OS once all in-flight
+	// Extract/Render calls drain to idle after a burst, so container RSS tracks
+	// real usage instead of holding a high-water mark. Runs off the request path;
+	// disable if the extra GC churn is unwanted. Reclaims Go-heap pages
+	// (debug.FreeOSMemory) and pdfium's freed native memory held in glibc's
+	// malloc arenas (malloc_trim) — the latter is most of the idle residue.
 	ScavengeOnIdle bool `envconfig:"PDF_SERVICE_SCAVENGE_ON_IDLE" default:"true"`
 	// LogLevel is the minimum slog level: debug|info|warn|error. Unknown/empty
 	// falls back to info. Bare LOG_LEVEL (not prefixed) matches the Ogen API's
