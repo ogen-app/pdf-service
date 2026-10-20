@@ -3,12 +3,11 @@
 // target (GOGC) and derives a soft memory limit (GOMEMLIMIT) from the cgroup
 // memory limit — keeping the heap bounded and container RSS predictable across
 // the bursty pdfium extraction workload. It complements the engine's idle
-// scavenge (debug.FreeOSMemory), which returns reclaimed Go pages to the OS
-// after a burst.
+// scavenge, which returns reclaimed memory to the OS after a burst.
 //
-// Scope: GOGC, GOMEMLIMIT, and debug.FreeOSMemory govern only Go-managed memory.
-// pdfium runs in-process via CGO, so its native (malloc) allocations are outside
-// the Go heap and unaffected by these knobs — see the README "Memory footprint".
+// Scope: GOGC and GOMEMLIMIT govern only Go-managed memory. pdfium runs
+// in-process via CGO, so its native (malloc) allocations are outside the Go heap
+// and unaffected by these knobs — see the README "Memory footprint".
 package runtimetune
 
 import (

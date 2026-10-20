@@ -44,7 +44,7 @@ type Engine struct {
 	// drains after a burst; active tracks in-flight Extract/Render calls so the
 	// drain-to-idle edge can be detected, and scavenging collapses overlapping
 	// scavenge triggers into one. scavengeFn is the actual reclaim
-	// (debug.FreeOSMemory), injectable for tests.
+	// (releaseOSMemory), injectable for tests.
 	scavengeOnIdle bool
 	scavengeFn     func()
 	active         atomic.Int64
@@ -57,11 +57,11 @@ type Config struct {
 	// pdfium work through one native instance regardless. Kept for API
 	// stability and a future multi_threaded backend.
 	Workers int
-	// ScavengeOnIdle returns freed memory to the OS (debug.FreeOSMemory) once all
-	// in-flight Extract/Render calls drain to idle after a burst, so container RSS
-	// tracks real usage. Reclaims Go-heap pages (the reassembled PDF bytes,
-	// extracted text, thumbnail) — pdfium's in-process CGO allocations are outside
-	// the Go heap and unaffected.
+	// ScavengeOnIdle returns freed memory to the OS once all in-flight
+	// Extract/Render calls drain to idle after a burst, so container RSS tracks
+	// real usage. Reclaims both pools: freed Go-heap pages (the reassembled PDF
+	// bytes, extracted text, thumbnail) via debug.FreeOSMemory, and pdfium's
+	// freed native memory that glibc keeps in its malloc arenas via malloc_trim.
 	ScavengeOnIdle bool
 }
 
@@ -71,7 +71,7 @@ func New(cfg Config) (*Engine, error) {
 	return &Engine{
 		pool:           pool,
 		scavengeOnIdle: cfg.ScavengeOnIdle,
-		scavengeFn:     debug.FreeOSMemory,
+		scavengeFn:     releaseOSMemory,
 	}, nil
 }
 
@@ -197,10 +197,8 @@ func (e *Engine) requestDone() {
 // scavenge returns freed memory to the OS off the request path. debug.
 // FreeOSMemory runs a stop-the-world GC, so it must not block a request; it also
 // must not pile up if bursts drain to idle repeatedly, hence the single-flight
-// guard. It reclaims only Go-managed pages — pdfium's in-process CGO allocations
-// are outside the Go heap and unaffected. If a request arrives mid-scavenge the
-// extra GC is harmless — just a little CPU, of which this service has ample
-// between bursts.
+// guard. If a request arrives mid-scavenge the extra GC and trim are harmless —
+// just a little CPU, of which this service has ample between bursts.
 func (e *Engine) scavenge() {
 	if !e.scavenging.CompareAndSwap(false, true) {
 		return // a scavenge is already running
@@ -211,6 +209,16 @@ func (e *Engine) scavenge() {
 		slog.Debug("returned freed memory to OS after idle",
 			"component", "pdfengine.scavenge")
 	}()
+}
+
+// releaseOSMemory returns freed memory from both pools to the OS: the Go heap
+// (debug.FreeOSMemory) and glibc's malloc arenas, where pdfium's freed native
+// memory otherwise stays resident. The native pool is the larger one at idle:
+// without the trim, RSS ratchets up with every burst while the live Go heap is
+// only a few MB.
+func releaseOSMemory() {
+	debug.FreeOSMemory()
+	mallocTrim()
 }
 
 func openDocument(inst pdfium.Pdfium, data []byte) (doc references.FPDF_DOCUMENT, closeDoc func(), err error) {

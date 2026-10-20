@@ -78,3 +78,9 @@ func TestScavenge_SingleFlight(t *testing.T) {
 	}
 	close(release)
 }
+
+// TestReleaseOSMemory is a smoke test for the real reclaim, including the
+// glibc malloc_trim call on Linux CGO builds (a no-op elsewhere).
+func TestReleaseOSMemory(t *testing.T) {
+	releaseOSMemory()
+}

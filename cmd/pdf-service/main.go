@@ -34,9 +34,9 @@ func main() {
 
 	logger := logging.New(cfg)
 
-	// Bound the Go heap to the container and return burst-freed Go memory to the
-	// OS so RSS tracks real usage instead of holding a high-water mark. pdfium's
-	// in-process CGO memory is outside the Go heap and unaffected — see README.
+	// Bound the Go heap to the container. The engine's idle scavenge returns
+	// burst-freed memory (Go heap and pdfium's glibc arenas) to the OS so RSS
+	// tracks real usage instead of holding a high-water mark — see README.
 	runtimetune.Apply(logger, cfg)
 
 	engine, err := pdfengine.New(pdfengine.Config{
