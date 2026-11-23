@@ -74,6 +74,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: bufbuild/buf-setup-action@v1
+        with:
+          # Unauthenticated release lookups share the runner IP's rate limit.
+          github_token: ${{ github.token }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
